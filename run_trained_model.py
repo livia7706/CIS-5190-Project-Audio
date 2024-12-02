@@ -43,8 +43,8 @@ def run_trained_model(X):
   # TODO: load your model weights
   def download_model_weights():
     import gdown
-    url = 'https://drive.google.com/file/d/1nHX3ilylGdgK6hlCkfvNX2IaBRsVmIsW/view?usp=sharing'
-    output = "best_weights.weights.h5"
+    url = 'https://drive.google.com/file/d/1W0t7daPx0egWDnk0UGtt9C-dKySqQOke/view?usp=drive_link'
+    output = "model.weights.h5"
     gdown.download(url, output, fuzzy=True)
 
     print(f"Downloaded file size: {os.path.getsize(output)} bytes")
