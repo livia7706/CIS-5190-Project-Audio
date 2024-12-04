@@ -1,87 +1,93 @@
 def run_trained_model(X):
   # X is of shape (N, ), where each element is a path string to a WAV file.
   # TODO: featurize the WAV files
-  !pip install git+https://github.com/openai/whisper.git
-  import whisper
-
-  import tensorflow as tf
-  from tensorflow.keras.models import Sequential
-  from tensorflow.keras.layers import Conv2D, MaxPooling2D, Flatten, Dense, Dropout
-  import librosa
+  !pip install torchvision torchaudio timm
+  import torchaudio.transforms as T
+  import torch
+  import random
+  from sklearn.model_selection import train_test_split
+  import torch.nn as nn
+  from timm import create_model
+  import os
+  import torchaudio
+  from torchaudio.transforms import MelSpectrogram, AmplitudeToDB
+  from torchvision.transforms import Resize
+  import torch
   import numpy as np
+  from torch.utils.data import Dataset
 
-  # Step 1: Featurize the WAV files
-  def load_and_resample(file_path, target_sr=16000):
-      audio, sr = librosa.load(file_path, sr=target_sr)  # Resample to target_sr
-      return audio
+  def preprocess_audio(file_path):
 
-  def extract_features(audio):
-      import whisper
-      mel = whisper.log_mel_spectrogram(audio).detach().numpy()
-      return mel
+    # mel transform
+    mel_transform = torchaudio.transforms.MelSpectrogram(
+        sample_rate=16000, n_fft=1024, hop_length=512, n_mels=128
+    )
+    db_transform = torchaudio.transforms.AmplitudeToDB()
+    resize_transform = Resize((300, 300))  # resize to 300 * 300
 
-  # Process input X to extract features
+    # load file
+    waveform, sample_rate = torchaudio.load(file_path)
+    if sample_rate != 16000:
+        resampler = torchaudio.transforms.Resample(orig_freq=sample_rate, new_freq=16000)
+        waveform = resampler(waveform)
+
+    mel_spec = mel_transform(waveform)
+    mel_spec_db = db_transform(mel_spec)
+    mel_spec_db = (mel_spec_db - mel_spec_db.min()) / (mel_spec_db.max() - mel_spec_db.min())
+    mel_spec_db = resize_transform(mel_spec_db)
+
+    if mel_spec_db.ndim == 2:  # if (H, W) -> (1, H, W)
+        mel_spec_db = mel_spec_db.unsqueeze(0)
+    elif mel_spec_db.ndim == 3 and mel_spec_db.shape[0] == 1:  # if (1, H, W)
+        pass
+    else:
+        raise ValueError(f"Unexpected shape of mel_spec_db: {mel_spec_db.shape}")
+
+    mel_spec_db = mel_spec_db.repeat(3, 1, 1)  #  (1, H, W) -> (3, H, W)
+    return mel_spec_db
 
   features = []
+
   for file_path in X:
-    if file_path.endswith('.wav'):
-      audio = load_and_resample(file_path)
-      feature = extract_features(audio)
-      features.append(feature)
-  # truncate features to match target_length
-  lengths = [feature.shape[1] for feature in features]
-  target_length = 100
-  #target_length = int(np.median(lengths))
-  features_fixed = [
-      feature[:, :target_length] if feature.shape[1] > target_length else
-      np.pad(feature, ((0, 0), (0, target_length - feature.shape[1])), 'constant')
-      for feature in features
-  ]
-  features_array = np.array(features_fixed).reshape(len(features_fixed), 80, target_length, 1)
+      mel_spec_db = preprocess_audio(file_path)
+      features.append(mel_spec_db.numpy())
+
+  # To NumPy array
+  features = np.array(features)
+  print(f"Loaded {len(features)} samples.")
+
+
+  # (N, 3, H, W)
+  if features.ndim == 4 and features.shape[1] == 1:  # (N, 1, H, W)
+      features = features.repeat(1, 3, 1, 1)  
 
 
   # TODO: load your model weights
   def download_model_weights():
     import gdown
-    url = 'https://drive.google.com/file/d/1en0Fita-LZhLkC60QUwjvl3pQ1qQi7U7/view?usp=sharing'
-    output = "model.weights.h5"
+    url = 'https://drive.google.com/file/d/1VQxBJhKYflzFAWkHmuXcVVJu9fwETkfM/view?usp=sharing'
+    output = "my_weights.pth"
     gdown.download(url, output, fuzzy=True)
-
-    print(f"Downloaded file size: {os.path.getsize(output)} bytes")
-
     return output
-
   weight_path = download_model_weights()
-  #weight_path = '/content/drive/My Drive/project/my_weights.weights.h5'
   #weights = np.load(weight_path, allow_pickle=True)
-
+  weights = torch.load(weight_path, map_location='cpu')
 
   # TODO: setup model
-  model = Sequential([
-      Conv2D(32, (3, 3), activation='relu', input_shape=(80, target_length, 1)),
-      MaxPooling2D((2, 2)),
-      Conv2D(64, (3, 3), activation='relu'),
-      MaxPooling2D((2, 2)),
-      Flatten(),
-      Dense(128, activation='relu'),
-      Dropout(0.5),
-      Dense(7, activation='softmax')
-  ])
-  model.compile(optimizer='adam', loss='sparse_categorical_crossentropy', metrics=['accuracy'])
+  model_name = "efficientnet_b3"  
+  device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+  model = create_model(model_name, pretrained=False, num_classes=len(CLASS_TO_LABEL))
+  model.load_state_dict(weights)   
+  model = model.to(device)
 
-  #model.summary()  
-  model.load_weights(weight_path)
-  #model.summary()  
+  features = torch.tensor(features).float().to(device)
 
-
+  model.eval()
   predictions = []
+  with torch.no_grad():
+      outputs = model(features)
+      _, predicted = torch.max(outputs, 1)
+      predictions = predicted.cpu().numpy() # Should be shape (N,) where each element is a class integer for the corresponding data point.
 
-  pred = model.predict(features_array)
-  #predictions.append(np.argmax(pred, axis=1))
-  predictions = np.argmax(pred, axis=1)
-
-  predictions = np.array(predictions) # Should be shape (N,) where each element is a class integer for the corresponding data point.
-  print(predictions.shape)
-  print(Y.shape)
   assert predictions.shape == Y.shape
   return predictions
