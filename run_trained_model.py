@@ -15,8 +15,7 @@ def run_trained_model(X_unseen):
     output = "my_weights.pth"
     gdown.download(url, output, fuzzy=True)
     return output
-  weight_path = download_model_weights()
-  weights = np.load(weight_path, allow_pickle=True)
+
 
   class ConvBlock(nn.Module):
     def __init__(self, in_channels, out_channels):
@@ -37,7 +36,7 @@ def run_trained_model(X_unseen):
     def __init__(self, num_classes):
         super(CNN14, self).__init__()
 
-        # 6个卷积块及其后面的平均池化层
+        
         self.conv1 = ConvBlock(3, 64)
         self.conv2 = ConvBlock(64, 128)
         self.conv3 = ConvBlock(128, 256)
@@ -45,11 +44,11 @@ def run_trained_model(X_unseen):
         self.conv5 = ConvBlock(512, 1024)
         #self.conv6 = ConvBlock(1024, 2048)
 
-        # 自适应全局平均池化，将空间维度强行变为1x1
+       
         self.adaptive_pool = nn.AdaptiveAvgPool2d((1, 1))
         self.adaptive_pool_mid = nn.AdaptiveAvgPool2d((8, 8))
 
-        # 最终的全连接层，输入特征维度 2048 -> 输出类别数
+        
         self.fc = nn.Linear(1024, num_classes)
 
     def forward(self, x):
@@ -62,13 +61,10 @@ def run_trained_model(X_unseen):
         x = self.conv5(x)
         #x = self.conv6(x)
 
-        # 自适应池化到1x1
         x = self.adaptive_pool(x)
 
-        # 展平成(batch, 2048)
         x = x.view(x.size(0), -1)
 
-        # 全连接层分类
         x = self.fc(x)
         return x
 
@@ -97,10 +93,8 @@ def run_trained_model(X_unseen):
 
   def transform_audio(sample_rate=16000, n_fft=512, n_mels=64, hop_length=256):
     return Compose([
-        # 重采样到目标频率
         T.Resample(orig_freq=sample_rate, new_freq=16000),
 
-        # 计算 Mel Spectrogram
         T.MelSpectrogram(
             sample_rate=16000,
             n_fft=n_fft,
@@ -108,21 +102,17 @@ def run_trained_model(X_unseen):
             n_mels=n_mels
         ),
 
-        # 转换为分贝单位
         T.AmplitudeToDB(),
 
-        # 计算 Delta 和 Delta-Delta
-        DeltaAndDeltaDelta()  # 自定义变换，添加 Delta 和 Delta-Delta 特征
+        DeltaAndDeltaDelta()  
     ])
 
 
-  # 自定义变换，添加 Delta 和 Delta-Delta 特征
   class DeltaAndDeltaDelta:
     def __call__(self, mel_db):
-        delta = T.ComputeDeltas()(mel_db)           # 计算一阶导数
-        delta2 = T.ComputeDeltas()(delta)           # 计算二阶导数
+        delta = T.ComputeDeltas()(mel_db)          
+        delta2 = T.ComputeDeltas()(delta)           
 
-        # 拼接 mel_db, delta 和 delta2 特征 (channel 维度)
         combined_features = torch.cat([mel_db, delta, delta2], dim=0)
         return combined_features
 
