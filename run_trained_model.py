@@ -1,156 +1,87 @@
-def run_trained_model(X_unseen):
-  import os
-  import numpy as np
-  import torch
-  import torch.nn as nn
-  import torchaudio
-  import gdown
-  from torch.utils.data import DataLoader, Dataset
-  from torchvision.transforms import Compose
-  import torchaudio.transforms as T
+def run_trained_model(X):
+  # X is of shape (N, ), where each element is a path string to a WAV file.
+  # TODO: featurize the WAV files
+  !pip install git+https://github.com/openai/whisper.git
+  import whisper
 
+  import tensorflow as tf
+  from tensorflow.keras.models import Sequential
+  from tensorflow.keras.layers import Conv2D, MaxPooling2D, Flatten, Dense, Dropout
+  import librosa
+  import numpy as np
+
+  # Step 1: Featurize the WAV files
+  def load_and_resample(file_path, target_sr=16000):
+      audio, sr = librosa.load(file_path, sr=target_sr)  # Resample to target_sr
+      return audio
+
+  def extract_features(audio):
+      import whisper
+      mel = whisper.log_mel_spectrogram(audio).detach().numpy()
+      return mel
+
+  # Process input X to extract features
+
+  features = []
+  for file_path in X:
+    if file_path.endswith('.wav'):
+      audio = load_and_resample(file_path)
+      feature = extract_features(audio)
+      features.append(feature)
+  # truncate features to match target_length
+  lengths = [feature.shape[1] for feature in features]
+  target_length = 100
+  #target_length = int(np.median(lengths))
+  features_fixed = [
+      feature[:, :target_length] if feature.shape[1] > target_length else
+      np.pad(feature, ((0, 0), (0, target_length - feature.shape[1])), 'constant')
+      for feature in features
+  ]
+  features_array = np.array(features_fixed).reshape(len(features_fixed), 80, target_length, 1)
+
+
+  # TODO: load your model weights
   def download_model_weights():
     import gdown
-    url = 'https://drive.google.com/file/d/1w-4zPuC1JhCt2lEWxm0KbAOewCchuKZ8/view?usp=sharing'
-    output = "my_weights.pth"
+    url = 'https://drive.google.com/file/d/15SurM8a68wJtIDH5MyYjOYr9KCA2-0EM/view?usp=sharing'
+    output = "best_weights.weights.h5"
     gdown.download(url, output, fuzzy=True)
+
+    print(f"Downloaded file size: {os.path.getsize(output)} bytes")
+
     return output
 
-
-  class ConvBlock(nn.Module):
-    def __init__(self, in_channels, out_channels):
-        super(ConvBlock, self).__init__()
-        self.block = nn.Sequential(
-            nn.Conv2d(in_channels, out_channels, kernel_size=3, padding=1),
-            nn.BatchNorm2d(out_channels),
-            nn.ReLU(),
-            nn.Conv2d(out_channels, out_channels, kernel_size=3, padding=1),
-            nn.BatchNorm2d(out_channels),
-            nn.ReLU()
-        )
-
-    def forward(self, x):
-        return self.block(x)
-
-  class CNN14(nn.Module):
-    def __init__(self, num_classes):
-        super(CNN14, self).__init__()
-
-        
-        self.conv1 = ConvBlock(3, 64)
-        self.conv2 = ConvBlock(64, 128)
-        self.conv3 = ConvBlock(128, 256)
-        self.conv4 = ConvBlock(256, 512)
-        self.conv5 = ConvBlock(512, 1024)
-        #self.conv6 = ConvBlock(1024, 2048)
-
-       
-        self.adaptive_pool = nn.AdaptiveAvgPool2d((1, 1))
-        self.adaptive_pool_mid = nn.AdaptiveAvgPool2d((8, 8))
-
-        
-        self.fc = nn.Linear(1024, num_classes)
-
-    def forward(self, x):
-        x = self.conv1(x)
-        x = self.adaptive_pool_mid(x)
-        x = self.conv2(x)
-        x = self.adaptive_pool_mid(x)
-        x = self.conv3(x)
-        x = self.conv4(x)
-        x = self.conv5(x)
-        #x = self.conv6(x)
-
-        x = self.adaptive_pool(x)
-
-        x = x.view(x.size(0), -1)
-
-        x = self.fc(x)
-        return x
+  weight_path = download_model_weights()
+  #weight_path = '/content/drive/My Drive/project/my_weights.weights.h5'
+  #weights = np.load(weight_path, allow_pickle=True)
 
 
-  class AudioDataset(Dataset):
-        def __init__(self, filepaths, labels, transform=None):
-            self.filepaths = filepaths
-            self.labels = labels
-            self.transform = transform
+  # TODO: setup model
+  model = Sequential([
+      Conv2D(32, (3, 3), activation='relu', input_shape=(80, target_length, 1)),
+      MaxPooling2D((2, 2)),
+      Conv2D(64, (3, 3), activation='relu'),
+      MaxPooling2D((2, 2)),
+      Flatten(),
+      Dense(128, activation='relu'),
+      Dropout(0.5),
+      Dense(7, activation='softmax')
+  ])
+  model.compile(optimizer='adam', loss='sparse_categorical_crossentropy', metrics=['accuracy'])
 
-        def __len__(self):
-            return len(self.filepaths)
-
-        def __getitem__(self, idx):
-            filepath = self.filepaths[idx]
-            label = self.labels[idx]
-
-            waveform, _ = torchaudio.load(filepath)
-            if waveform.size(0) > 1:
-                waveform = torch.mean(waveform, dim=0, keepdim=True)
-            if self.transform:
-                waveform = self.transform(waveform)
-            if waveform.dim() == 2:
-                waveform = waveform.unsqueeze(0)
-            return waveform, label
-
-  def transform_audio(sample_rate=16000, n_fft=512, n_mels=64, hop_length=256):
-    return Compose([
-        T.Resample(orig_freq=sample_rate, new_freq=16000),
-
-        T.MelSpectrogram(
-            sample_rate=16000,
-            n_fft=n_fft,
-            hop_length=hop_length,
-            n_mels=n_mels
-        ),
-
-        T.AmplitudeToDB(),
-
-        DeltaAndDeltaDelta()  
-    ])
+  #model.summary()
+  model.load_weights(weight_path)
+  #model.summary()
 
 
-  class DeltaAndDeltaDelta:
-    def __call__(self, mel_db):
-        delta = T.ComputeDeltas()(mel_db)          
-        delta2 = T.ComputeDeltas()(delta)           
+  predictions = []
 
-        combined_features = torch.cat([mel_db, delta, delta2], dim=0)
-        return combined_features
+  pred = model.predict(features_array)
+  #predictions.append(np.argmax(pred, axis=1))
+  predictions = np.argmax(pred, axis=1)
 
-  def collate_fn(batch):
-        waveforms, labels = zip(*batch)
-        max_len = max(waveform.shape[-1] for waveform in waveforms)
-        padded_waveforms = [torch.nn.functional.pad(waveform, (0, max_len - waveform.shape[-1])) for waveform in waveforms]
-        return torch.stack(padded_waveforms), torch.tensor(labels, dtype=torch.long)
-
-  def classifier(X_unseen, Y_unseen):
-        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
-        weights_path = download_model_weights()
-        #weights = np.load(weight_path, allow_pickle=True)
-
-        #weights_path = "best_model.pth"
-
-        # Load model
-        model = CNN14(num_classes=7).to(device)
-        state_dict = torch.load(weights_path, map_location=device)
-        model.load_state_dict(state_dict)
-        model.eval()
-
-        # Prepare data and predict
-        transform = transform_audio()
-        val_dataset = AudioDataset(X_unseen, Y_unseen, transform=transform)
-        eval_loader = DataLoader(val_dataset, batch_size=32, collate_fn=collate_fn)
-        all_preds = []
-
-        with torch.no_grad():
-            for batch_waveforms, _ in eval_loader:
-                batch_waveforms = batch_waveforms.to(device)
-                outputs = model(batch_waveforms)
-                preds = torch.argmax(outputs, dim=1)
-                all_preds.extend(preds.cpu().numpy())
-
-        return np.array(all_preds)
-
-  predictions = classifier(X, Y)
+  predictions = np.array(predictions) # Should be shape (N,) where each element is a class integer for the corresponding data point.
+  print(predictions.shape)
+  print(Y.shape)
   assert predictions.shape == Y.shape
   return predictions
